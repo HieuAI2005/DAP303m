@@ -1,0 +1,72 @@
+# Prerequisites
+*.d
+
+# Compiled Python / C
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Logs and Databases
+*.log
+*.sqlite
+*.db
+
+# Project Specific Data & Indexes
+data/indexes/
+data/rawdata/
+data/movienet/
+data/unified_dataset/
+movie_data_subset_20/
+*.faiss
+*.pkl
+*.npy
+*.json
+
+# Downloaded Models/Weights
+*.pt
+*.pth
+*.h5
+*.ckpt
+*.safetensors
+
+# Gradio / Web
+gradio_cached_examples/
+flagged/
+demo_error.log
+
+VideoRAG/
+temp/
+.agent/
+data/
+experiments/
+papers/
+docs/
+presentation/
+tools/
+scripts/

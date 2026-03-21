@@ -1,0 +1,16 @@
+services:
+  movie-neo4j:
+    image: neo4j:5.18.0
+    container_name: movie-neo4j
+    ports:
+      - "7475:7474" # HTTP Browser
+      - "7688:7687" # Bolt Protocol
+    environment:
+      - NEO4J_AUTH=neo4j/movierag123
+      - NEO4J_PLUGINS=["apoc"]
+    volumes:
+      - ./data/neo4j/data:/data
+      - ./data/neo4j/logs:/logs
+      - ./data/neo4j/import:/var/lib/neo4j/import
+      - ./data/neo4j/plugins:/plugins
+    restart: unless-stopped
