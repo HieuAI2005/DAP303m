@@ -65,8 +65,8 @@ temp/
 .agent/
 data/
 experiments/
-papers/
-docs/
+papers
+docs
 presentation/
 tools/
-scripts/
+scripts
