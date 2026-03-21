@@ -1,0 +1,3 @@
+"""
+MovieRAG Scripts Package
+"""

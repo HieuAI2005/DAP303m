@@ -60,13 +60,9 @@ gradio_cached_examples/
 flagged/
 demo_error.log
 
-VideoRAG/
 temp/
 .agent/
 data/
 experiments/
-papers
-docs
 presentation/
 tools/
-scripts
