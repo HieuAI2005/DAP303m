@@ -352,14 +352,15 @@ class LLMGenerator:
 
         # Add History
         history_str = ""
+        has_history = bool(history)
         if history:
             history_str = "--- CONVERSATION HISTORY ---\n"
             for msg in history[-5:]:
                 if isinstance(msg, dict):
                     role = "User" if msg.get("role") == "user" else "Assistant"
-                    history_str += f"{role}: {msg.get('content', '')}\n"
+                    history_str += f"{role}: {msg.get('content', '')[:400]}\n"
                 elif isinstance(msg, (list, tuple)) and len(msg) >= 2:
-                    history_str += f"User: {msg[0]}\nAssistant: {msg[1]}\n"
+                    history_str += f"User: {msg[0]}\nAssistant: {str(msg[1])[:400]}\n"
             history_str += "\n"
 
         base_instructions = (
@@ -384,6 +385,12 @@ class LLMGenerator:
                 "Provide a concise, direct answer based on the retrieved results."
             )
 
+        no_repeat_rule = (
+            "- IMPORTANT: The CONVERSATION HISTORY above shows what was already answered. "
+            "Do NOT repeat the same scenes, descriptions, or information already given. "
+            "Focus specifically on answering the NEW question with fresh details.\n"
+        ) if has_history else ""
+
         prompt = f"""{base_instructions}
 Task: {instruction}
 
@@ -392,7 +399,8 @@ Rules:
 - Reference specific movies, shots, and details from the context.
 - If a user uploads an image and visual matches exist, tell them which movie and scene was identified.
 - Answer in the same language as the user's question.
-
+- Be concise and focused — do not pad the answer with repeated scene descriptions.
+{no_repeat_rule}
 {history_str}
 {context_str}
 

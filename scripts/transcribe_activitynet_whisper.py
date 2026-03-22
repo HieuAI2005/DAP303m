@@ -75,13 +75,17 @@ def extract_audio(video_path: Path, audio_out: Path) -> bool:
 
 # ── Groq Whisper API ─────────────────────────────────────────────────────────
 
-def transcribe_audio(audio_path: Path) -> dict | None:
-    """Transcribe audio using Groq Whisper API."""
-    from dotenv import load_dotenv
-    load_dotenv(PROJECT_ROOT / ".env")
-    import groq
+class DailyLimitExceeded(Exception):
+    """Raised when Groq daily ASPD quota is exhausted for this key."""
 
-    client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
+
+def transcribe_audio(audio_path: Path, client=None) -> dict | None:
+    """Transcribe audio using Groq Whisper API."""
+    if client is None:
+        from dotenv import load_dotenv
+        load_dotenv(PROJECT_ROOT / ".env")
+        import groq
+        client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
 
     try:
         with open(audio_path, "rb") as f:
@@ -106,7 +110,11 @@ def transcribe_audio(audio_path: Path) -> dict | None:
             "segments": segments,
         }
     except Exception as e:
+        err_str = str(e)
         logger.warning(f"  Whisper API error: {e}")
+        # Detect daily ASPD quota exhaustion — raise so caller can rotate key
+        if "ASPD" in err_str or ("seconds of audio per day" in err_str and "Limit" in err_str):
+            raise DailyLimitExceeded(err_str) from e
         return None
 
 
@@ -127,7 +135,8 @@ def get_rate_limited_client():
 
 
 def process_video(video_path: Path, rate_limiter, client) -> dict | None:
-    """Extract audio → transcribe → return transcript."""
+    """Extract audio → transcribe → return transcript.
+    Raises DailyLimitExceeded if the API key's daily quota is exhausted."""
     video_id = video_path.stem
     audio_out = TEMP_AUDIO_DIR / f"{video_id}.wav"
 
@@ -138,8 +147,9 @@ def process_video(video_path: Path, rate_limiter, client) -> dict | None:
     # Rate limit
     rate_limiter.wait()
 
-    # Transcribe
-    return transcribe_audio(audio_out)
+    # Transcribe — pass client so key rotation works
+    # DailyLimitExceeded propagates to caller for key rotation
+    return transcribe_audio(audio_out, client=client)
 
 
 class RateLimiter:
@@ -192,7 +202,10 @@ def transcribe_all(dry_run: bool = True, limit: int = 0):
         os.environ.get("GROQ_API_KEY_2", ""),
     ]
     keys = [k for k in keys if k]
-    client = groq.Groq(api_key=keys[0] if keys else "")
+    key_idx = 0
+    exhausted_keys = set()
+    client = groq.Groq(api_key=keys[key_idx])
+    logger.info(f"Using key {key_idx+1}/{len(keys)}")
 
     success = 0
     failed = 0
@@ -202,7 +215,37 @@ def transcribe_all(dry_run: bool = True, limit: int = 0):
         video_id = video_path.stem
         transcript_path = TRANSCRIPT_DIR / f"{video_id}.json"
 
-        result = process_video(video_path, rate_limiter, client)
+        try:
+            result = process_video(video_path, rate_limiter, client)
+        except DailyLimitExceeded:
+            # This key's daily quota is exhausted — rotate to next key
+            exhausted_keys.add(key_idx)
+            next_keys = [j for j in range(len(keys)) if j not in exhausted_keys]
+            if next_keys:
+                key_idx = next_keys[0]
+                client = groq.Groq(api_key=keys[key_idx])
+                logger.info(f"  🔄 Daily limit hit — rotating to key {key_idx+1}/{len(keys)}")
+                # Retry the same video with new key
+                try:
+                    result = process_video(video_path, rate_limiter, client)
+                except DailyLimitExceeded:
+                    exhausted_keys.add(key_idx)
+                    next_keys2 = [j for j in range(len(keys)) if j not in exhausted_keys]
+                    if next_keys2:
+                        key_idx = next_keys2[0]
+                        client = groq.Groq(api_key=keys[key_idx])
+                        logger.info(f"  🔄 Daily limit hit — rotating to key {key_idx+1}/{len(keys)}")
+                        try:
+                            result = process_video(video_path, rate_limiter, client)
+                        except DailyLimitExceeded:
+                            logger.warning("  ⚠️ All keys exhausted for today. Stopping.")
+                            break
+                    else:
+                        logger.warning("  ⚠️ All keys exhausted for today. Stopping.")
+                        break
+            else:
+                logger.warning("  ⚠️ All keys exhausted for today. Stopping.")
+                break
 
         if result:
             with open(transcript_path, "w", encoding="utf-8") as f:

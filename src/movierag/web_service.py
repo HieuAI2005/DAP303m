@@ -141,11 +141,15 @@ class RuntimeService:
         return None
 
     def _discover_movie_ids(self) -> List[str]:
+        pipeline_out = PreCfg.get_output_root()
         ids = set()
         for directory, pattern in (
             (PreCfg.get_annotation_dir(), "*.json"),
+            (pipeline_out / "annotation", "*.json"),
             (PreCfg.get_subtitle_dir(), "*.srt"),
+            (pipeline_out / "subtitle", "*.srt"),
             (PreCfg.get_meta_dir(), "*.json"),
+            (pipeline_out / "meta", "*.json"),
             (PreCfg.get_temporal_chunks_dir(), "*_chunks.json"),
             (PreCfg.get_script_subscenes_dir(), "*_script_subscenes.json"),
         ):
@@ -174,23 +178,43 @@ class RuntimeService:
 
         return sorted(ids)
 
+    def _resolve_artifact_path(self, candidates: list) -> Path:
+        """Return first existing path from candidates list, else last candidate."""
+        for p in candidates:
+            if p and Path(p).exists():
+                return Path(p)
+        return Path(candidates[-1]) if candidates else Path("")
+
     def artifact_inventory(self, movie_id: str) -> List[Dict[str, Any]]:
         movie_id = (movie_id or "").strip()
+        pipeline_out = PreCfg.get_output_root()
         video_path = PreCfg.get_video_path(movie_id) if movie_id else None
         keyframe_dir = PreCfg.get_shot_keyf_dir() / movie_id if movie_id else None
+        meta_path = self._resolve_artifact_path([
+            PreCfg.get_meta_dir() / f"{movie_id}.json",
+            pipeline_out / "meta" / f"{movie_id}.json",
+        ])
+        annotation_path = self._resolve_artifact_path([
+            PreCfg.get_annotation_dir() / f"{movie_id}.json",
+            pipeline_out / "annotation" / f"{movie_id}.json",
+        ])
+        subtitle_path = self._resolve_artifact_path([
+            PreCfg.get_subtitle_dir() / f"{movie_id}.srt",
+            pipeline_out / "subtitle" / f"{movie_id}.srt",
+        ])
         items = [
             ("raw_video", "Raw video", video_path, None),
-            ("metadata", "Metadata", PreCfg.get_meta_dir() / f"{movie_id}.json", None),
+            ("metadata", "Metadata", meta_path, None),
             (
                 "annotation",
                 "Annotation",
-                PreCfg.get_annotation_dir() / f"{movie_id}.json",
+                annotation_path,
                 None,
             ),
             (
                 "subtitle",
                 "Subtitle",
-                PreCfg.get_subtitle_dir() / f"{movie_id}.srt",
+                subtitle_path,
                 None,
             ),
             (
@@ -231,6 +255,21 @@ class RuntimeService:
             )
         return results
 
+    def _movie_title(self, movie_id: str) -> str:
+        """Return human-readable title from chunks file, falling back to movie_id."""
+        try:
+            chunks_path = PreCfg.get_temporal_chunks_dir() / f"{movie_id}_chunks.json"
+            if chunks_path.exists():
+                data = json.loads(chunks_path.read_text(encoding="utf-8"))
+                chunks = data.get("chunks", data) if isinstance(data, dict) else data
+                if chunks:
+                    title = chunks[0].get("title", "")
+                    if title:
+                        return title
+        except Exception:
+            pass
+        return movie_id
+
     def library_rows(self) -> List[Dict[str, Any]]:
         rows = []
         for movie_id in self._discover_movie_ids():
@@ -248,6 +287,7 @@ class RuntimeService:
             rows.append(
                 {
                     "movie_id": movie_id,
+                    "title": self._movie_title(movie_id),
                     "artifact_ratio": f"{ready}/{total}",
                     "video": artifacts[0]["exists"],
                     "subtitle": artifacts[3]["exists"],
@@ -321,6 +361,7 @@ class RuntimeService:
         payload = {
             "movie_id": getattr(result, "movie_id", metadata.get("movie_id", "")),
             "clip_id": getattr(result, "clip_id", metadata.get("clip_id", "")),
+            "text": getattr(result, "text", metadata.get("text", "")),
             "path": getattr(result, "path", metadata.get("path", "")),
             "score": float(getattr(result, "score", 0.0) or 0.0),
             "metadata": metadata,
@@ -416,12 +457,14 @@ class RuntimeService:
         image_path: Optional[str] = None,
         video_path: Optional[str] = None,
         history: Optional[List[Dict[str, Any]]] = None,
+        movie_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         result = self.pipeline.respond(
             query=query or "",
             image_path=image_path,
             video_path=video_path,
             history=history or [],
+            movie_id=movie_id or None,
         )
 
         answer = result.get("answer", "")
@@ -467,8 +510,10 @@ class RuntimeService:
             },
             "temporal_grounding": temporal_info,
             "knowledge_results": [
-                self._serialize_search_result(item) for item in knowledge_results[:5]
-            ],
+                self._serialize_search_result(item)
+                for item in knowledge_results
+                if (getattr(item, "metadata", {}) or {}).get("category") != "moviegraph"
+            ][:5],
             "visual_results": [
                 self._serialize_search_result(item) for item in visual_results[:8]
             ],
@@ -485,23 +530,34 @@ class RuntimeService:
             return []
         summary = []
         for cluster in scene_results[:4]:
+            # Support both dict and TextSearchResult objects
+            if hasattr(cluster, "text"):
+                meta = cluster.metadata if hasattr(cluster, "metadata") else {}
+                c = meta
+                score = float(getattr(cluster, "score", 0.0) or 0.0)
+                keyframe_paths = meta.get("keyframe_paths", []) or []
+            else:
+                c = cluster
+                score = float(cluster.get("score", 0.0) or 0.0)
+                keyframe_paths = cluster.get("keyframe_paths", []) or []
             summary.append(
                 {
-                    "heading": cluster.get("heading", "")
-                    or cluster.get("scene_label", "")
+                    "heading": c.get("heading", "")
+                    or c.get("scene_label", "")
+                    or c.get("situation", "")
                     or "Scene cluster",
                     "time_range": self._format_time_range(
-                        str(cluster.get("start_time", "") or ""),
-                        str(cluster.get("end_time", "") or ""),
+                        str(c.get("start_time", "") or c.get("start_seconds", "") or ""),
+                        str(c.get("end_time", "") or c.get("end_seconds", "") or ""),
                     ),
-                    "location": cluster.get("location", ""),
-                    "score": float(cluster.get("score", 0.0) or 0.0),
+                    "location": c.get("location", "") or c.get("vision_setting", ""),
+                    "score": score,
                     "representative_frame_url": self.media_url(
-                        str(cluster.get("representative_frame", "") or "")
+                        str(c.get("representative_frame", "") or "")
                     ),
                     "keyframe_urls": [
                         self.media_url(str(path))
-                        for path in (cluster.get("keyframe_paths", []) or [])[:4]
+                        for path in keyframe_paths[:4]
                         if self.media_url(str(path))
                     ],
                 }

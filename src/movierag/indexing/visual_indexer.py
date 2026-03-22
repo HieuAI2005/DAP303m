@@ -726,7 +726,7 @@ class VisualIndexer:
             results.append(
                 SearchResult(
                     id=meta["id"],
-                    path=meta["path"],
+                    path=meta.get("path", ""),
                     movie_id=meta.get("movie_id", "unknown"),
                     score=float(score),
                     metadata=meta,
@@ -845,7 +845,7 @@ class VisualIndexer:
             meta = self._metadata[idx]
 
             # Exclude same image
-            if exclude_same and query_path and meta["path"] == query_path:
+            if exclude_same and query_path and meta.get("path", "") == query_path:
                 continue
 
             # Apply movie filter if specified
@@ -855,7 +855,7 @@ class VisualIndexer:
             results.append(
                 SearchResult(
                     id=meta["id"],
-                    path=meta["path"],
+                    path=meta.get("path", ""),
                     movie_id=meta.get("movie_id", "unknown"),
                     score=float(score),
                     metadata=meta,
@@ -1093,8 +1093,8 @@ class VisualIndexer:
             results.append(
                 SearchResult(
                     id=meta["id"],
-                    path=meta["path"],
-                    movie_id=meta["movie_id"],
+                    path=meta.get("path", ""),
+                    movie_id=meta.get("movie_id") or meta.get("video_id", "unknown"),
                     score=final_score,
                     metadata={
                         **meta,

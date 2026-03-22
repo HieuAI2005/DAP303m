@@ -146,6 +146,10 @@ class FaissBuilder:
         """
         Add a single movie's chunks to the existing FAISS index.
         For new video ingest without rebuilding the entire index.
+
+        Uses FAISS reconstruct() to preserve existing vectors for items that
+        have no image path (e.g. ActivityNet frames), instead of re-encoding
+        the entire index from disk images.
         """
         chunks_path = Cfg.get_temporal_chunks_dir() / f"{movie_id}_chunks.json"
         if not chunks_path.exists():
@@ -153,45 +157,138 @@ class FaissBuilder:
             return {"items": 0}
 
         chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
-        items = self._flatten_chunks(chunks)
+        new_items = self._flatten_chunks(chunks)
 
-        if not items:
+        if not new_items:
             return {"items": 0}
 
         sys.path.insert(0, str(Cfg.SRC_DIR))
+        import numpy as np
+        import faiss as faiss_lib
         from movierag.indexing.visual_indexer import VisualIndexer
 
         indexer = VisualIndexer(str(self.index_dir))
-        combined_items = {}
 
-        # Rebuild from existing metadata plus the new movie's items.
-        # Replace stale entries for the same movie instead of stacking old and new runs.
-        if indexer.load():
+        if not indexer.load():
+            # No existing index — build fresh from new items only
+            indexer.build_index(new_items, id_key="id", path_key="path")
+            indexer.save()
+            total_scene_items = len(getattr(indexer, "_scene_metadata", []) or [])
             logger.info(
-                f"  Loaded existing index, merging {len(items)} items for {movie_id}"
+                f"  ✅ Visual index built with {len(new_items)} frame vectors for {movie_id}"
             )
-            for meta in indexer._metadata:
-                meta_item = dict(meta)
-                if meta_item.get("movie_id") == movie_id:
-                    continue
-                item_id = meta_item.get("id")
-                if item_id:
-                    combined_items[item_id] = meta_item
+            return {
+                "items": len(new_items),
+                "movie_id": movie_id,
+                "total_items": len(new_items),
+                "total_scene_items": total_scene_items,
+            }
 
-        for item in items:
-            combined_items[item["id"]] = item
+        # Existing index loaded — reconstruct vectors for items we keep,
+        # then encode only the new movie's items from images.
+        existing_dim = indexer._index.d
+        keep_indices = []   # FAISS vector positions in existing index
+        keep_metadata = []  # metadata dicts for kept items
 
-        merged_items = list(combined_items.values())
-        indexer.build_index(merged_items, id_key="id", path_key="path")
+        for i, meta in enumerate(indexer._metadata):
+            if meta.get("movie_id") == movie_id:
+                continue  # drop stale entries for this movie
+            keep_indices.append(i)
+            keep_metadata.append(dict(meta))
+
+        logger.info(
+            f"  Reconstructing {len(keep_indices)} existing vectors, "
+            f"encoding {len(new_items)} new items for {movie_id}"
+        )
+
+        # Reconstruct existing vectors from FAISS (avoids re-encoding from images)
+        if keep_indices:
+            existing_vecs = np.zeros((len(keep_indices), existing_dim), dtype=np.float32)
+            for j, faiss_idx in enumerate(keep_indices):
+                indexer._index.reconstruct(int(faiss_idx), existing_vecs[j])
+        else:
+            existing_vecs = np.zeros((0, existing_dim), dtype=np.float32)
+
+        # Encode only the new movie's keyframes
+        new_paths = [item["path"] for item in new_items]
+        new_vecs = indexer.encoder.encode_images(new_paths, normalize=True)
+
+        if len(new_vecs) == 0:
+            logger.warning(f"  No new vectors encoded for {movie_id}")
+            return {"items": 0}
+
+        # Build new metadata list
+        new_metadata = []
+        for item in new_items:
+            meta = {
+                "id": item["id"],
+                "path": item["path"],
+                "movie_id": item.get("movie_id", "unknown"),
+                **{k: v for k, v in item.items() if k not in ("id", "path", "movie_id")},
+            }
+            new_metadata.append(meta)
+
+        all_metadata = keep_metadata + new_metadata
+
+        # Combine vectors and build new flat index
+        if len(existing_vecs) > 0:
+            all_vecs = np.vstack([existing_vecs, new_vecs]).astype(np.float32)
+        else:
+            all_vecs = new_vecs.astype(np.float32)
+
+        new_index = faiss_lib.IndexFlatIP(existing_dim)
+        new_index.add(all_vecs)
+
+        indexer._index = new_index
+        indexer._metadata = all_metadata
         indexer.save()
         total_scene_items = len(getattr(indexer, "_scene_metadata", []) or [])
 
         logger.info(
-            f"  ✅ Visual index now stores {len(merged_items)} frame vectors and {total_scene_items} scene vectors after merging {movie_id}"
+            f"  ✅ Visual index now stores {len(all_metadata)} frame vectors and "
+            f"{total_scene_items} scene vectors after merging {movie_id}"
         )
+
+        # Also update the knowledge (text) index with the new movie's chunks
+        knowledge_result = self._update_knowledge_index(movie_id)
+
         return {
-            "items": len(items),
+            "items": len(new_items),
             "movie_id": movie_id,
-            "total_items": len(merged_items),
+            "total_items": len(all_metadata),
             "total_scene_items": total_scene_items,
+            "knowledge_added": knowledge_result.get("added", 0),
+            "knowledge_total": knowledge_result.get("total", 0),
         }
+
+    def _update_knowledge_index(self, movie_id: str) -> Dict:
+        """Update the knowledge (SentenceTransformer text) FAISS index for movie_id."""
+        chunks_path = Cfg.get_temporal_chunks_dir() / f"{movie_id}_chunks.json"
+        if not chunks_path.exists():
+            logger.warning(f"  No chunks file for {movie_id} — knowledge index not updated")
+            return {"added": 0, "total": 0}
+
+        try:
+            chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
+            if isinstance(chunks, dict):
+                chunks = chunks.get("chunks", [])
+        except Exception as exc:
+            logger.warning(f"  Failed to load chunks for knowledge index update: {exc}")
+            return {"added": 0, "total": 0}
+
+        try:
+            from movierag.indexing.knowledge_indexer import KnowledgeIndexer
+
+            ki = KnowledgeIndexer(
+                index_dir=str(self.index_dir),
+                index_name="knowledge_videorag",
+            )
+            result = ki.build_incremental(movie_id, chunks)
+            logger.info(
+                f"  ✅ Knowledge index updated: +{result.get('added', 0)} chunks "
+                f"→ {result.get('total', 0)} total for {movie_id}"
+            )
+            return result
+        except Exception as exc:
+            logger.warning(f"  Knowledge index update failed for {movie_id}: {exc}")
+            return {"added": 0, "total": 0}

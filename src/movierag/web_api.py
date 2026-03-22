@@ -27,6 +27,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
+        "http://localhost:4173",
         "http://127.0.0.1:5173",
         "http://localhost:4173",
         "http://127.0.0.1:4173",
@@ -45,7 +46,7 @@ def get_service() -> RuntimeService:
     )
     knowledge_index_name = _find_existing_index_name(
         knowledge_index_dir,
-        ["movierag_index", "knowledge_index", "knowledge_unified", "videorag_knowledge"],
+        ["knowledge_videorag", "movierag_index", "knowledge_index", "knowledge_unified", "videorag_knowledge"],
     ) or "movierag_index"
     visual_index_name = _find_existing_index_name(
         runtime_index_dir,
@@ -93,6 +94,7 @@ def reload_runtime() -> dict:
 async def qa(
     query: str = Form(default=""),
     history_json: str = Form(default="[]"),
+    movie_id: str = Form(default=""),
     image: Optional[UploadFile] = File(default=None),
     video: Optional[UploadFile] = File(default=None),
 ) -> dict:
@@ -114,6 +116,7 @@ async def qa(
         image_path=image_path,
         video_path=video_path,
         history=history,
+        movie_id=movie_id or None,
     )
 
 
@@ -138,6 +141,31 @@ async def ingest(
         subtitle_path=subtitle_path,
         force=force,
     )
+
+
+@app.post("/api/chat")
+async def chat(
+    message: str = Form(...),
+    history_json: str = Form(default="[]"),
+    session_id: str = Form(default="default"),
+    movie_id: str = Form(default=""),
+) -> dict:
+    """Multi-turn chat endpoint — sends message + history to the RAG pipeline."""
+    service = get_service()
+    try:
+        history = __import__("json").loads(history_json or "[]")
+    except Exception:
+        history = []
+
+    result = service.ask(query=message, history=history, movie_id=movie_id or None)
+    return {
+        "answer": result.get("answer", ""),
+        "intent": result.get("intent", ""),
+        "thoughts": result.get("thoughts", []),
+        "knowledge_results": result.get("knowledge_results", []),
+        "visual_results": result.get("visual_results", []),
+        "session_id": session_id,
+    }
 
 
 @app.get("/api/media")

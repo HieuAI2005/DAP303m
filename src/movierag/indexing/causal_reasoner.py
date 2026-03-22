@@ -279,11 +279,17 @@ class CausalReasoner:
         # Step 3: Extract causal triples from context
         all_triples: List[CausalTriple] = []
         for scene in (context_scenes or []):
-            text = scene.get("description", "") or scene.get("vlm_description", "")
+            # Support both dict and TextSearchResult objects
+            if hasattr(scene, "text"):
+                text = scene.text
+                scene_id = getattr(scene, "clip_id", None)
+            else:
+                text = scene.get("description", "") or scene.get("vlm_description", "")
+                scene_id = scene.get("scene_id")
             if text:
                 triples = self.extractor.extract_from_text(
                     text,
-                    scene_id=scene.get("scene_id"),
+                    scene_id=scene_id,
                     movie_id=movie_id,
                 )
                 all_triples.extend(triples)

@@ -291,6 +291,27 @@ class KeyframeExtractor:
                             "timestamp_sec": round(ts, 3),
                         })
 
+            # Fallback: if no pre-extracted shot images found, extract directly from video
+            if not scene_keyframes and video_path:
+                start_sec = scene["start_sec"]
+                end_sec   = scene["end_sec"]
+                dur       = end_sec - start_sec
+                for k, frac in enumerate([0.25, 0.5, 0.75]):
+                    ts = start_sec + dur * frac
+                    fname     = f"{movie_id}_scene_{s_idx:03d}-{k+1:02d}.jpg"
+                    out_path  = out_dir / fname
+                    if force or not out_path.exists():
+                        self.extract_frame_at_time(video_path, ts, out_path)
+                    if out_path.exists():
+                        scene_keyframes.append({
+                            "filename": fname,
+                            "scene_idx": s_idx,
+                            "scene_id": scene_id,
+                            "shot_idx": 0,
+                            "path": str(out_path),
+                            "timestamp_sec": round(ts, 3),
+                        })
+
             # --- Lọc Đa Lớp (Advanced Visual Pruning) ---
             if self.prune and self.pruner and scene_keyframes:
                 frame_paths = [kf["path"] for kf in scene_keyframes]

@@ -168,6 +168,12 @@ class AgenticVideoRAGPipeline:
         except Exception as e:
             logger.warning(f"Could not initialize graph store: {e}")
 
+        # ── Retriever callables — wire to knowledge index helpers ────────────────
+        # Signature: (movie_id, query, k) -> list
+        self._scene_metadata_retriever = self._scene_retriever
+        self._script_retriever = None
+        self._dialogue_retriever = None
+
         # ── Video Understanding Modules (lazy-loaded) ──────────────────────────
         self._vlm_analyzer = None
         self._temporal_grounder = None
@@ -176,6 +182,10 @@ class AgenticVideoRAGPipeline:
         self._action_recognizer = None
         self._face_tracker = None
         self._video_captioner = None
+
+    def _scene_retriever(self, movie_id: str, query: str, k: int = 6) -> list:
+        """Retrieve scenes from knowledge index filtered by movie_id."""
+        return self.retrieve_knowledge(query, k=k, movie_id=movie_id)
 
     @property
     def vlm_analyzer(self):
@@ -1046,17 +1056,31 @@ class AgenticVideoRAGPipeline:
 
         lines = []
         for i, scene in enumerate(scene_results[:limit]):
-            heading = self._first_non_empty(
-                scene.get("heading"), scene.get("scene_label"), "Scene cluster"
-            )
-            location = str(scene.get("location", "") or "").strip()
-            start_time = str(scene.get("start_time", "") or "")
-            end_time = str(scene.get("end_time", "") or "")
-            cluster_type = str(scene.get("cluster_type", "") or "")
-            score = float(scene.get("score", 0.0) or 0.0)
-            visual_score = float(scene.get("best_visual_score", 0.0) or 0.0)
-            script_score = float(scene.get("best_script_score", 0.0) or 0.0)
-            evidence_count = int(scene.get("evidence_count", 0) or 0)
+            # Support both dict and TextSearchResult objects
+            if hasattr(scene, "text"):
+                # TextSearchResult from knowledge_indexer
+                meta = scene.metadata if hasattr(scene, "metadata") else {}
+                heading = meta.get("scene_label") or meta.get("situation") or "Scene"
+                location = str(meta.get("vision_setting", "") or "").strip()
+                start_time = str(meta.get("start_seconds", "") or "")
+                end_time = str(meta.get("end_seconds", "") or "")
+                cluster_type = "knowledge"
+                score = float(getattr(scene, "score", 0.0) or 0.0)
+                visual_score = 0.0
+                script_score = 0.0
+                evidence_count = 1
+            else:
+                heading = self._first_non_empty(
+                    scene.get("heading"), scene.get("scene_label"), "Scene cluster"
+                )
+                location = str(scene.get("location", "") or "").strip()
+                start_time = str(scene.get("start_time", "") or "")
+                end_time = str(scene.get("end_time", "") or "")
+                cluster_type = str(scene.get("cluster_type", "") or "")
+                score = float(scene.get("score", 0.0) or 0.0)
+                visual_score = float(scene.get("best_visual_score", 0.0) or 0.0)
+                script_score = float(scene.get("best_script_score", 0.0) or 0.0)
+                evidence_count = int(scene.get("evidence_count", 0) or 0)
 
             lines.append(
                 f"[{i + 1}] {heading} | {start_time}->{end_time} | type={cluster_type} | "
@@ -1065,21 +1089,25 @@ class AgenticVideoRAGPipeline:
             if location:
                 lines.append(f"location: {location}")
 
+            _sg = scene if not hasattr(scene, "text") else (scene.metadata if hasattr(scene, "metadata") else {})
             visual_cues = [
-                str(v).strip() for v in (scene.get("visual_cues", []) or []) if str(v).strip()
+                str(v).strip() for v in (_sg.get("visual_cues", []) or []) if str(v).strip()
             ]
             if visual_cues:
                 lines.append("visual_cues: " + ", ".join(visual_cues[:3]))
 
             characters = [
-                str(v).strip() for v in (scene.get("characters", []) or []) if str(v).strip()
+                str(v).strip() for v in (_sg.get("characters", []) or []) if str(v).strip()
             ]
-            if characters:
+            if not characters and hasattr(scene, "text"):
+                # Pull text as fallback context
+                lines.append(f"context: {scene.text[:200]}")
+            elif characters:
                 lines.append("characters: " + ", ".join(characters[:6]))
 
             script_characters = [
                 str(v).strip()
-                for v in (scene.get("script_characters", []) or [])
+                for v in (_sg.get("script_characters", []) or [])
                 if str(v).strip()
             ]
             if script_characters:
@@ -1087,7 +1115,7 @@ class AgenticVideoRAGPipeline:
 
             script_heads = [
                 str(item.get("heading", "")).strip()
-                for item in (scene.get("script_subscenes", []) or [])[:3]
+                for item in (_sg.get("script_subscenes", []) or [])[:3]
                 if str(item.get("heading", "")).strip()
             ]
             if script_heads:
@@ -1095,7 +1123,7 @@ class AgenticVideoRAGPipeline:
 
             semantic_ids = [
                 str(v).strip()
-                for v in (scene.get("semantic_scene_ids", []) or [])
+                for v in (_sg.get("semantic_scene_ids", []) or [])
                 if str(v).strip()
             ]
             if semantic_ids:
@@ -1103,13 +1131,13 @@ class AgenticVideoRAGPipeline:
 
             script_scene_uids = [
                 str(v).strip()
-                for v in (scene.get("script_scene_uids", []) or [])
+                for v in (_sg.get("script_scene_uids", []) or [])
                 if str(v).strip()
             ]
             if script_scene_uids:
                 lines.append("script_scene_uids: " + ", ".join(script_scene_uids[:3]))
 
-            representative_frame = str(scene.get("representative_frame", "") or "")
+            representative_frame = str(_sg.get("representative_frame", "") or "")
             if representative_frame:
                 lines.append(f"representative_frame: {os.path.basename(representative_frame)}")
 
@@ -1313,7 +1341,7 @@ class AgenticVideoRAGPipeline:
                 break
 
         # Build scene results string
-        scene_str = self._format_scene_results_for_prompt(scene_results, identified_movie)
+        scene_str = self._format_scene_results_for_prompt(scene_results)
 
         # Build context for generation
         context_parts = []
@@ -1412,7 +1440,8 @@ Provide a clear, accurate answer based on the evidence above."""
                 max_tokens=1024,
                 temperature=0.3,
             )
-            return answer.strip() if answer else "Limited information available."
+            text = answer.text if hasattr(answer, "text") else answer
+            return text.strip() if text else "Limited information available."
         except Exception as e:
             thoughts.append(f"⚠️ Answer generation failed: {e}")
             return "I encountered an error generating the answer."
@@ -1425,6 +1454,7 @@ Provide a clear, accurate answer based on the evidence above."""
         image_path: Optional[str] = None,
         video_path: Optional[str] = None,
         history: Optional[List[Dict]] = None,
+        movie_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Full agentic pipeline: Contextualize → Route → Retrieve → Grade → Generate.
@@ -1482,8 +1512,16 @@ Provide a clear, accurate answer based on the evidence above."""
                     )
                     break
 
+        # Override auto-detected movie with explicit caller-supplied movie_id
+        if movie_id:
+            identified_movie = movie_id
+            thoughts.append(f"🎯 Movie filter applied: {identified_movie}")
+
         # ─── Step 3: Video Understanding — TEMPORAL & NARRATIVE routing ───
         scene_results: list = []
+        visual_results: list = []
+        knowledge_results: list = []
+        script_results: list = []
         temporal_grounding_result: Optional[Any] = None
         causal_answer: Optional[Any] = None
 
@@ -1520,41 +1558,48 @@ Provide a clear, accurate answer based on the evidence above."""
                     f"causal triples"
                 )
 
-            # Skip swarm loop for pure temporal/narrative — go straight to generation
-            # Build a minimal context and go to generation
-            if intent == QueryIntent.TEMPORAL and temporal_grounding_result:
-                extra_context = (
-                    f"Temporal Grounding Result: The event occurs at "
-                    f"[{temporal_grounding_result.segment[0]:.1f}s – "
-                    f"{temporal_grounding_result.segment[1]:.1f}s] with "
-                    f"confidence {temporal_grounding_result.confidence:.2f}.\n"
-                    f"Reasoning: {temporal_grounding_result.reasoning_trace}\n"
-                )
-            elif intent == QueryIntent.NARRATIVE and causal_answer:
-                extra_context = (
-                    f"Causal Explanation: {causal_answer.causal_explanation}\n"
-                    f"Supporting Evidence:\n" +
-                    "\n".join(
-                        f"  - {e['cause']} → {e['effect']}"
-                        for e in causal_answer.supporting_evidence[:5]
-                    ) +
-                    f"\nReasoning Trace: {causal_answer.reasoning_trace}\n"
-                )
-            else:
-                extra_context = ""
-            # Jump to generation step with pre-computed context
-            return self._generate_with_context(
-                query=contextualized,
-                intent=intent,
-                visual_results=visual_results,
-                knowledge_results=knowledge_results,
-                script_results=script_results,
-                scene_results=scene_results,
-                thoughts=thoughts,
-                extra_context=extra_context,
-                temporal_grounding_result=temporal_grounding_result,
-                causal_answer=causal_answer,
+            # Only short-circuit to generation if we actually got a grounding result.
+            # If temporal/narrative grounding fails (no movie context), fall through
+            # to the normal swarm knowledge retrieval loop below.
+            # TEMPORAL: only if grounded=True. NARRATIVE: only if strong causal chain (≥3 triples, confidence≥0.7)
+            _causal_strong = (
+                causal_answer is not None
+                and len(getattr(causal_answer, "supporting_evidence", [])) >= 3
+                and getattr(getattr(causal_answer, "causal_chain", None), "confidence", 0.0) >= 0.7
             )
+            if (intent == QueryIntent.TEMPORAL and temporal_grounding_result and getattr(temporal_grounding_result, "grounded", False)) or \
+               (intent == QueryIntent.NARRATIVE and _causal_strong):
+                if intent == QueryIntent.TEMPORAL:
+                    extra_context = (
+                        f"Temporal Grounding Result: The event occurs at "
+                        f"[{temporal_grounding_result.segment[0]:.1f}s – "
+                        f"{temporal_grounding_result.segment[1]:.1f}s] with "
+                        f"confidence {temporal_grounding_result.confidence:.2f}.\n"
+                        f"Reasoning: {temporal_grounding_result.reasoning_trace}\n"
+                    )
+                else:
+                    extra_context = (
+                        f"Causal Explanation: {causal_answer.causal_explanation}\n"
+                        f"Supporting Evidence:\n" +
+                        "\n".join(
+                            f"  - {e['cause']} → {e['effect']}"
+                            for e in causal_answer.supporting_evidence[:5]
+                        ) +
+                        f"\nReasoning Trace: {causal_answer.reasoning_trace}\n"
+                    )
+                return self._generate_with_context(
+                    query=contextualized,
+                    intent=intent,
+                    visual_results=visual_results,
+                    knowledge_results=knowledge_results,
+                    script_results=script_results,
+                    scene_results=scene_results,
+                    thoughts=thoughts,
+                    extra_context=extra_context,
+                    temporal_grounding_result=temporal_grounding_result,
+                    causal_answer=causal_answer,
+                )
+            # Grounding failed — fall through to swarm knowledge retrieval
 
         # ─── Step 4: Swarm Verification Loop (No Tools for Gemma) ───
         max_iterations = 3
@@ -1905,6 +1950,8 @@ Provide a clear, accurate answer based on the evidence above."""
                         QueryIntent.MULTIMODAL,
                         QueryIntent.MACRO_KNOWLEDGE,
                         QueryIntent.DIALOG,
+                        QueryIntent.NARRATIVE,
+                        QueryIntent.TEMPORAL,
                     ):
                         # Bỏ qua tìm text FAISS nếu có ảnh VÀ câu hỏi quá ngắn/chung chung (VD: "Ai đây?", "Đây là phim gì?")
                         skip_text_search = False
@@ -1918,10 +1965,10 @@ Provide a clear, accurate answer based on the evidence above."""
                             thoughts.append(
                                 f"📜 Gọi LoreAgent truy xuất Đồ thị và Kịch bản cho: '{q}'"
                             )
-                            # If VLM injected a new query (i.e. not the main query), drop the strict movie filter so it can find correct movies
-                            movie_filter = (
-                                identified_movie if q == current_queries[0] else None
-                            )
+                            # Apply movie filter to all queries when movie is identified via text.
+                            # Only drop filter when no movie was identified (VLM/image path where
+                            # we search broadly to find the correct movie).
+                            movie_filter = identified_movie if identified_movie else None
                             try:
                                 kr = self.retrieve_knowledge(
                                     q, k=4, movie_id=movie_filter

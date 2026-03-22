@@ -102,16 +102,20 @@ class AutoAnnotator:
             image_dir.mkdir(parents=True, exist_ok=True)
             
             logger.info(f"  📸 Saving thumbnails to {image_dir}...")
-            # We use save_images which can take a list of scenes
-            # It can save multiple images per scene (start, mid, end)
-            save_images(
-                scene_list=scene_list,
-                video=video,
-                num_images=3,
-                output_dir=str(image_dir),
-                image_name_template=f"{movie_id}_shot_$SCENE_NUMBER-$IMAGE_NUMBER",
-                show_progress=False
-            )
+            try:
+                video.seek(0)  # reset stream position after detect_scenes()
+                save_images(
+                    scene_list=scene_list,
+                    video=video,
+                    num_images=3,
+                    output_dir=str(image_dir),
+                    image_name_template=f"{movie_id}_shot_$SCENE_NUMBER-$IMAGE_NUMBER",
+                    show_progress=False
+                )
+                saved = list(image_dir.glob("*.jpg"))
+                logger.info(f"  📸 Saved {len(saved)} thumbnails")
+            except Exception as img_err:
+                logger.warning(f"  save_images failed: {img_err} — keyframe_extractor will fallback")
             
             shots = []
             for i, scene in enumerate(scene_list):

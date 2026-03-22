@@ -90,6 +90,12 @@ def is_rate_limit_error(exc: Exception | str) -> bool:
     return any(marker in message for marker in markers)
 
 
+def is_access_denied_error(exc: Exception | str) -> bool:
+    """403 Access denied — retrying won't help, bail immediately."""
+    message = str(exc).lower()
+    return "403" in message or "access denied" in message
+
+
 def _positive_int(value: Any) -> int | None:
     try:
         parsed = int(value)
@@ -320,6 +326,10 @@ class UniversalLLMClient:
                     break  # Success
                 except Exception as e:
                     logger.error(f"❌ Groq call failed for {model_name}: {e}")
+                    if is_access_denied_error(e):
+                        # 403 — no point retrying, bail out of entire retry loop
+                        logger.warning("⛔ Groq 403 Access Denied — skipping all retries.")
+                        raise RuntimeError(f"Groq access denied (403): {e}") from e
                     if is_rate_limit_error(e):
                         rate_limit_errors.append(e)
                     time.sleep(self.retry_base_seconds + attempt)
