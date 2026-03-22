@@ -98,7 +98,7 @@ class AutoAnnotator:
             
             # Save thumbnails for EACH shot
             # Logic: Save 1, 2, or more depending on duration
-            image_dir = Cfg.OUTPUT_DIR / movie_id / "shot_images" if Cfg.OUTPUT_DIR else Path("shot_images")
+            image_dir = Cfg.OUTPUT_DIR / movie_id / "shot_images" if Cfg.OUTPUT_DIR else Cfg.PROJECT_ROOT / "shot_images" / movie_id
             image_dir.mkdir(parents=True, exist_ok=True)
             
             logger.info(f"  📸 Saving thumbnails to {image_dir}...")
