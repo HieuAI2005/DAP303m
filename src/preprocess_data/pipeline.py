@@ -323,8 +323,10 @@ class PipelineRunner:
             extractor.process_movie(self.movie_id, force=self.force)
         except Exception as e:
             if self._should_abort_on_llm_error(e):
-                raise
-            logger.error(f"  VLM Vision Extraction failed: {e}")
+                logger.warning(f"  ⚠️ VLM Vision Extraction skipped (rate limit): {e}")
+                logger.warning(f"  Pipeline continues — VLM data will be absent for this movie.")
+            else:
+                logger.error(f"  VLM Vision Extraction failed: {e}")
 
     def step_6aa_script_scene_vlm_extraction(self):
         """Extract screenplay-aligned visual descriptions for child script scenes."""

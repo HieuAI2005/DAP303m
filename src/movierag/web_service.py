@@ -421,9 +421,7 @@ class RuntimeService:
         return start_time or end_time or "N/A"
 
     def _build_gallery_items(self, result: Dict[str, Any], visual_results: List[Any], intent: str) -> List[Dict[str, str]]:
-        if intent not in ("VISUAL", "MULTIMODAL"):
-            return []
-
+        max_items = 6 if intent in ("VISUAL", "MULTIMODAL") else 4
         gallery_items = []
         seen_paths = set()
 
@@ -435,7 +433,7 @@ class RuntimeService:
                 return False
             seen_paths.add(image_path)
             gallery_items.append({"path": image_path, "url": media_url})
-            return len(gallery_items) >= 6
+            return len(gallery_items) >= max_items
 
         for result_item in visual_results:
             meta = getattr(result_item, "metadata", {}) or {}

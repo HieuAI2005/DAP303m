@@ -164,6 +164,7 @@ async def chat(
         "thoughts": result.get("thoughts", []),
         "knowledge_results": result.get("knowledge_results", []),
         "visual_results": result.get("visual_results", []),
+        "gallery_items": result.get("gallery_items", []),
         "session_id": session_id,
     }
 

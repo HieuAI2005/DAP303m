@@ -1373,3 +1373,54 @@ code   { font-family: var(--font-mono); font-size: 0.9em; }
   font-size: 13px;
   cursor: pointer;
 }
+
+/* ── Chat Gallery ────────────────────────────────────────────────────────────── */
+.chat-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.chat-gallery-img {
+  width: 140px;
+  height: 90px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.chat-gallery-img:hover {
+  transform: scale(1.04);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+}
+
+/* ── Visual Frame Grid (Query page) ─────────────────────────────────────────── */
+.visual-frames-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.visual-frame-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.visual-frame-img {
+  width: 130px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.visual-frame-img:hover { transform: scale(1.04); }
+.visual-frame-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+  padding: 0 2px;
+}

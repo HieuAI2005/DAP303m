@@ -392,12 +392,24 @@ function QueryPage() {
         vFrames.length > 0 ? (
           <div className="step-data">
             <div className="sd-summary">{status.visual_frames || vFrames.length} keyframes retrieved</div>
-            <div className="visual-chips">
+            <div className="visual-frames-grid">
               {vFrames.slice(0, 6).map((r, i) => (
-                <div key={i} className="visual-chip">
-                  <span>{r.movie_id || '—'}</span>
-                  <span>sim={r.score?.toFixed(3) || '—'}</span>
-                </div>
+                r.url ? (
+                  <div key={i} className="visual-frame-card">
+                    <a href={r.url} target="_blank" rel="noreferrer">
+                      <img className="visual-frame-img" src={r.url} alt={`frame-${i+1}`} loading="lazy" />
+                    </a>
+                    <div className="visual-frame-meta">
+                      <span>{r.movie_id || '—'}</span>
+                      <span>sim={r.score?.toFixed(3) || '—'}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div key={i} className="visual-chip">
+                    <span>{r.movie_id || '—'}</span>
+                    <span>sim={r.score?.toFixed(3) || '—'}</span>
+                  </div>
+                )
               ))}
             </div>
           </div>
@@ -626,10 +638,11 @@ function ChatPage({ initialMovieId, onMovieIdChange }) {
       const result = await apiFetch('/api/chat', { method: 'POST', body: form })
       const answer  = result.answer || '(no answer)'
       const sources = result.knowledge_results || []
+      const gallery = result.gallery_items || []
 
       setMessages(prev => [
         ...prev.slice(0, -1),
-        { role: 'assistant', content: answer, sources, intent: result.intent, thoughts: result.thoughts }
+        { role: 'assistant', content: answer, sources, gallery, intent: result.intent, thoughts: result.thoughts }
       ])
     } catch (e) {
       setMessages(prev => prev.slice(0, -1))
@@ -691,6 +704,15 @@ function ChatPage({ initialMovieId, onMovieIdChange }) {
                               </span>
                             )
                           })}
+                        </div>
+                      )}
+                      {msg.gallery?.length > 0 && (
+                        <div className="chat-gallery">
+                          {msg.gallery.map((img, j) => (
+                            <a key={j} href={img.url} target="_blank" rel="noreferrer">
+                              <img className="chat-gallery-img" src={img.url} alt={`frame-${j+1}`} loading="lazy" />
+                            </a>
+                          ))}
                         </div>
                       )}
                       {msg.intent && (
