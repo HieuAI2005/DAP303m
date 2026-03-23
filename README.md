@@ -136,7 +136,3 @@ Xem log:
 - Agentic pipeline runtime nằm ở `src/movierag/pipeline/agentic_pipeline.py`.
 
 ---
-
-## License
-
-N/A (project nội bộ).
